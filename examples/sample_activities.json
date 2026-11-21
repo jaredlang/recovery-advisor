@@ -1,0 +1,6 @@
+[
+  {"activityId":101,"activityName":"Early Easy Run","startTimeLocal":"2026-11-06 06:20:00","activityType":{"typeKey":"running"},"duration":2820,"distance":8400,"averageHR":126,"calories":450,"startLatitude":29.0,"ownerFullName":"PERSON"},
+  {"activityId":102,"activityName":"Brick Ride","startTimeLocal":"2026-11-07 07:20:00","activityType":{"typeKey":"virtual_ride"},"duration":4100,"distance":34700,"avgPower":168,"normPower":173,"calories":665},
+  {"activityId":103,"activityName":"Transition Run","startTimeLocal":"2026-11-07 09:00:00","activityType":{"typeKey":"running"},"duration":1880,"distance":5100,"averageHR":118,"calories":275},
+  {"activityId":104,"activityName":"Sunday Endurance Run","startTimeLocal":"2026-11-08 06:50:00","activityType":{"typeKey":"running"},"duration":4095,"distance":11300,"averageHR":131,"calories":695}
+]

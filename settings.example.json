@@ -1,0 +1,11 @@
+{
+  "timezone": "America/Chicago",
+  "baseline_days": 14,
+  "analysis_days": 7,
+  "daily_sync_lookback_days": 2,
+  "ai_reports_enabled": false,
+  "openai_model": "gpt-4.1-mini",
+  "weight_kg": null,
+  "race_goal": "",
+  "dietary_preferences": ""
+}
