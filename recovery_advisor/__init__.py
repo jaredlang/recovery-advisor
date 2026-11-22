@@ -1,2 +1,2 @@
-"""Garmin recovery advisor application."""
-__version__ = '2.3.0'
+"""Recovery Advisor CLI and training insights package."""
+__version__ = "2.7.0"

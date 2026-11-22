@@ -11,6 +11,24 @@ from typing import Any
 from .paths import DB
 from .constants import ACTIVITY_KEYS, METRIC_FIELDS
 
+def strip_legacy_advisor_section(description: str) -> str:
+    """Ignore old AI-authored sections when importing human Garmin workout notes.
+
+    Historical versions may have inserted a marker-delimited block. This read-
+    only sanitizer prevents previously generated AI text from being interpreted
+    as new athlete feedback. It never modifies anything in Garmin.
+    """
+    begin='[Recovery Advisor:BEGIN]'
+    end='[Recovery Advisor:END]'
+    if begin not in description:
+        return description
+    before, remainder=description.split(begin,1)
+    if end not in remainder:
+        # Conservative: discard the apparent machine-authored trailing section.
+        return before.rstrip()
+    return (before + remainder.split(end,1)[1]).strip()
+
+
 def iso_now() -> str:
     return dt.datetime.now(dt.timezone.utc).isoformat(timespec='seconds')
 
@@ -43,7 +61,8 @@ def sql_open(path: Path = DB) -> sqlite3.Connection:
       received_at TEXT NOT NULL,
       event_day TEXT NOT NULL,
       question TEXT NOT NULL,
-      answer TEXT
+      answer TEXT,
+      activity_id TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_feedback_day ON feedback(event_day);
     CREATE TABLE IF NOT EXISTS activity_classification_overrides (
@@ -66,6 +85,11 @@ def sql_open(path: Path = DB) -> sqlite3.Connection:
     );
     CREATE TABLE IF NOT EXISTS state (key TEXT PRIMARY KEY, value TEXT);
     ''')
+    # Existing v2.3 installations have no feedback.activity_id column.
+    columns={row['name'] for row in db.execute('PRAGMA table_info(feedback)')}
+    if 'activity_id' not in columns:
+        db.execute('ALTER TABLE feedback ADD COLUMN activity_id TEXT')
+    db.execute('CREATE INDEX IF NOT EXISTS idx_feedback_activity ON feedback(activity_id)')
     db.commit()
     return db
 
@@ -89,7 +113,7 @@ def clean_activity(record: dict) -> dict:
     clean = {k: record[k] for k in ACTIVITY_KEYS if k in record and k not in ('description','notes')}
     for key in ('description','notes'):
         if isinstance(record.get(key),str) and record[key].strip():
-            clean[key]=record[key].strip()[:2000]
+            clean[key]=strip_legacy_advisor_section(record[key]).strip()[:2000]
     kind = record.get('activityType')
     if isinstance(kind, dict):
         clean['activityType'] = {'typeKey': str(kind.get('typeKey', 'unknown'))[:64]}
@@ -113,7 +137,7 @@ def clean_detail(record: Any) -> dict:
                     clean[field]=value
             for field in ('description','notes'):
                 if field not in clean and isinstance(nested.get(field),str) and nested[field].strip():
-                    clean[field]=nested[field].strip()[:2000]
+                    clean[field]=strip_managed(nested[field]).strip()[:2000]
     return clean
 
 def insert_activity(db: sqlite3.Connection, raw: dict) -> tuple[bool, bool]:

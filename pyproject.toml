@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "recovery-advisor"
-version = "2.3.0"
+version = "2.7.0"
 description = "Personal Garmin endurance-training and recovery advisor"
 requires-python = ">=3.12"
 dependencies = [

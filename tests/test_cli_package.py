@@ -34,13 +34,13 @@ class InstalledInterfaceTests(unittest.TestCase):
     def test_all_expected_subcommands_are_available(self):
         result = self.invoke('--help')
         self.assertEqual(result.returncode, 0, result.stderr)
-        for command in ('sync','report','ask','feedback','status','activities','classify'):
+        for command in ('sync','review','ask','status','config','manage'):
             self.assertIn(command, result.stdout)
 
     def test_cli_version(self):
         result = self.invoke('--version')
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn('2.3.0', result.stdout)
+        self.assertIn('2.7.0', result.stdout)
 
     def test_command_works_outside_project_and_preserves_settings(self):
         result = self.invoke('status')

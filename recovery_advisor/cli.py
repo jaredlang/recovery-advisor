@@ -1,203 +1,189 @@
-"""Cli for the endurance recovery advisor."""
+"""Small, task-oriented command line frontend.
+
+Every prior v2.6 command still delegates to legacy_cli.main so existing user
+scripts keep working; these commands are intentionally absent from top-level
+help. New commands are thin argument translations, not duplicate business logic.
+"""
 from __future__ import annotations
 
 import argparse
-import contextlib
-import datetime as dt
-import json
-import sqlite3
 import sys
-from pathlib import Path
 
-from .paths import REPORTS
 from . import __version__
-from .settings import load_config, save_config, now_local
-from .storage import sql_open, state_get, state_set, status_put, iso_now, import_activity_file, activity_date
-from .garmin_sync import sync_online, error_label
-from .classification import (query_range, activity_classifications, set_classification_override)
-from .analysis import context_data
-from .reporting import write_report, ai_context_digest, safe_markdown
-from .feedback import ask, record_feedback, checkin
+from . import legacy_cli
+from .settings import load_config
 
-def main(argv:list[str]|None=None) -> int:
-    parser=argparse.ArgumentParser(description='Personal Garmin training/recovery advisor')
-    parser.add_argument('--version', action='version', version=f'%(prog)s {__version__}')
-    parser.add_argument('--as-of',help='Local YYYY-MM-DD for offline testing / reporting')
-    sub=parser.add_subparsers(dest='command',required=True)
-    sync_parser=sub.add_parser('sync',help='Checkpoint-based Garmin sync and report refresh')
-    sync_parser.add_argument('--backfill-days',type=int,
-                             help='Manual re-scan for older late-uploaded data, e.g. 30')
-    sync_parser.add_argument('--refresh-notes',action='store_true',
-                             help='Also re-fetch stored activity details for the backfill window to capture edited descriptions')
-    importer=sub.add_parser('import-json',help='Offline import of existing Garmin activities')
-    importer.add_argument('file',type=Path)
-    sub.add_parser('report',help='Regenerate report without Garmin network calls')
-    asker=sub.add_parser('ask',help='Ask AI a question; question is saved as athlete feedback first')
-    asker.add_argument('--question',help='Optional question text (otherwise prompted privately)')
-    asker.add_argument('--event-day',help='YYYY-MM-DD when the experience happened; defaults to today')
-    feedback_parser=sub.add_parser('feedback',help='Record an observation/question locally without AI')
-    feedback_parser.add_argument('--question',help='Optional observation text (otherwise prompted)')
-    feedback_parser.add_argument('--event-day',help='YYYY-MM-DD of experience; defaults to today')
-    sub.add_parser('checkin',help='Add or replace subjective check-in')
-    sub.add_parser('status',help='Show local data status')
-    activity_parser=sub.add_parser('activities',help='List recent Garmin records with automatic classifications')
-    activity_parser.add_argument('--days',type=int,default=30)
-    review_parser=sub.add_parser('review-activities',help='Show only ambiguous Garmin records needing confirmation')
-    review_parser.add_argument('--days',type=int,default=30)
-    classify_parser=sub.add_parser('classify',help='Optional correction of an ambiguous automatic classification (stored in SQLite)')
-    classify_parser.add_argument('activity_id',help='Existing Garmin activity ID')
-    classify_parser.add_argument('label',choices=('workout','feedback_only','auto'))
-    marked_parser=sub.add_parser('mark-feedback',help='Compatibility alias: confirm an activity as feedback-only in SQLite')
-    marked_parser.add_argument('activity_id',help='Garmin activity ID (see activities command)')
-    unmarked_parser=sub.add_parser('unmark-feedback',help='Compatibility alias: confirm an activity as a workout in SQLite')
-    unmarked_parser.add_argument('activity_id',help='Garmin activity ID')
-    setting=sub.add_parser('set',help='Set onboarding and AI options')
-    setting.add_argument('key',choices=('race_goal','weight_kg','dietary_preferences','ai_reports_enabled',
-                                        'openai_model','resting_hr_bpm','usual_bedtime','usual_wake_time',
-                                        'baseline_days','analysis_days','feedback_reporting_mode'))
-    setting.add_argument('value',help='New value; use true/false for ai_reports_enabled')
-    args=parser.parse_args(argv)
-    config=load_config()
-    if args.as_of:
-        today=dt.date.fromisoformat(args.as_of)
-    else:
-        today=now_local(config).date()
-    if args.command=='set':
-        value=args.value
-        if args.key=='ai_reports_enabled':
-            if value.lower() not in ('true','false'):
-                parser.error('Use true or false')
-            value=value.lower()=='true'
-        elif args.key=='weight_kg':
-            value=float(value)
-            if not 20<=value<=300: parser.error('Body mass must be between 20 and 300 kg')
-        elif args.key=='resting_hr_bpm':
-            value=None if value.lower() in ('none','null','clear') else float(value)
-            if value is not None and not 30<=value<=110:
-                parser.error('Resting HR reference must be 30–110 bpm')
-        elif args.key in ('usual_bedtime','usual_wake_time'):
-            if value.lower() in ('none','null','clear'):
-                value=None
-            else:
-                try: dt.time.fromisoformat(value)
-                except ValueError: parser.error('Use HH:MM, e.g. 22:30')
-                if len(value)!=5: parser.error('Use HH:MM, e.g. 22:30')
-        elif args.key=='feedback_reporting_mode':
-            if value not in ('issues_only','unspecified'):
-                parser.error('Use issues_only or unspecified')
-        elif args.key in ('baseline_days','analysis_days'):
-            if not value.isdecimal() or not 1<=int(value)<=365:
-                parser.error('Days must be 1–365')
-            value=int(value)
-            if args.key=='baseline_days' and value<int(config['analysis_days']):
-                parser.error('Baseline must be >= analysis days')
-            if args.key=='analysis_days' and value>int(config['baseline_days']):
-                parser.error('Analysis days must be <= baseline days')
-        config[args.key]=value
-        save_config(config)
-        print('Updated setting:',args.key,'(stored locally in settings.json)')
+MAIN_HELP = f"""recovery-advisor {__version__} — Garmin-based endurance recovery advisor
+
+Common commands:
+  recovery-advisor sync                         Fetch Garmin updates; refresh reports
+  recovery-advisor review                       Generate the latest recovery report
+  recovery-advisor ask [\"your question\"]      Ask AI; automatically save feedback
+  recovery-advisor status                       Show sync and data status
+
+Configuration and maintenance:
+  recovery-advisor config                       Show personal settings
+  recovery-advisor config weight 70             Set weight (kg)
+  recovery-advisor config hr 50                 Set resting HR reference (bpm)
+  recovery-advisor config ai on                 Enable optional AI reports
+  recovery-advisor manage                       List occasional maintenance actions
+
+Use 'recovery-advisor <command> --help' for options.
+Existing v2.6 commands remain available for backward compatibility.
+"""
+
+MANAGE_HELP = """Occasional maintenance actions:
+  recovery-advisor manage workouts [--days 30]       List workout records
+  recovery-advisor manage uncertain [--days 30]      Review ambiguous activities
+  recovery-advisor manage classify ID LABEL          Set workout|feedback_only|auto
+  recovery-advisor manage feedback [--days 30]       List athlete feedback
+  recovery-advisor manage note [\"observation\"]      Record feedback without AI
+  recovery-advisor manage link FEEDBACK_ID ACTIVITY_ID
+  recovery-advisor manage unlink FEEDBACK_ID
+  recovery-advisor manage checkin                    Optional daily check-in
+  recovery-advisor manage backfill 30                Recheck older Garmin workouts
+  recovery-advisor manage backfill 30 --refresh-notes
+  recovery-advisor manage import path/to/file.json   Import Garmin JSON offline
+
+These actions affect only local data except 'backfill', which reads Garmin.
+"""
+
+ALIASES = {
+    'goal': 'race_goal', 'race': 'race_goal', 'weight': 'weight_kg',
+    'hr': 'resting_hr_bpm', 'rest-hr': 'resting_hr_bpm',
+    'bedtime': 'usual_bedtime', 'wake': 'usual_wake_time',
+    'diet': 'dietary_preferences', 'ai': 'ai_reports_enabled',
+    'model': 'openai_model', 'baseline': 'baseline_days',
+    'window': 'analysis_days', 'feedback-mode': 'feedback_reporting_mode',
+}
+
+LEGACY_COMMANDS = {
+    'sync', 'report', 'ask', 'status', 'import-json', 'feedback',
+    'feedback-list', 'link-feedback', 'unlink-feedback', 'checkin',
+    'activities', 'review-activities', 'classify', 'mark-feedback',
+    'unmark-feedback', 'set',
+}
+
+
+def _question_command(command: str, argv: list[str], prefix: list[str]) -> int:
+    """Accept a natural-language positional question but retain old flags."""
+    parser = argparse.ArgumentParser(prog=f'recovery-advisor {command}')
+    parser.add_argument('message', nargs='*', help='Text to ask or record; prompted if omitted')
+    parser.add_argument('--question', help='Backward-compatible explicit question')
+    parser.add_argument('--event-day', help='YYYY-MM-DD when the experience occurred')
+    parser.add_argument('--activity-id', help='Optional Garmin workout association')
+    args = parser.parse_args(argv)
+    if args.question is not None and args.message:
+        parser.error('Use either quoted message text or --question, not both')
+    question = args.question if args.question is not None else (' '.join(args.message) if args.message else None)
+    converted = prefix + [command]
+    if question is not None:
+        converted += ['--question', question]
+    if args.event_day:
+        converted += ['--event-day', args.event_day]
+    if args.activity_id:
+        converted += ['--activity-id', args.activity_id]
+    return legacy_cli.main(converted)
+
+
+def _config(argv: list[str], prefix: list[str]) -> int:
+    parser = argparse.ArgumentParser(
+        prog='recovery-advisor config',
+        description='Show or update personal settings (stored locally in settings.json)',
+        epilog='Examples: config weight 70; config hr 50; config goal "Ironman 70.3"; config ai on',
+    )
+    parser.add_argument('field', nargs='?', help='weight, hr, goal, bedtime, wake, diet, ai, model, baseline, window')
+    parser.add_argument('value', nargs='?', help='New setting value')
+    args = parser.parse_args(argv)
+    if args.field is None or args.field == 'show':
+        if args.value is not None:
+            parser.error('Use config without arguments to view settings')
+        conf = load_config()
+        print('Personal settings:')
+        for friendly, key in [
+            ('Goal', 'race_goal'), ('Weight (kg)', 'weight_kg'),
+            ('Resting HR reference (bpm)', 'resting_hr_bpm'),
+            ('Usual bedtime', 'usual_bedtime'), ('Usual wake time', 'usual_wake_time'),
+            ('Diet', 'dietary_preferences'), ('AI reports enabled', 'ai_reports_enabled'),
+            ('AI model', 'openai_model'), ('Baseline days', 'baseline_days'),
+            ('Analysis days', 'analysis_days'), ('Feedback mode', 'feedback_reporting_mode'),
+        ]:
+            print(f'  {friendly}: {conf.get(key) if conf.get(key) is not None else "not set"}')
+        print('Change one with: recovery-advisor config weight 70')
         return 0
-    with contextlib.closing(sql_open()) as db:
-        if args.command=='import-json':
-            result=import_activity_file(db,args.file)
-            print(json.dumps(result,indent=2))
-            path=write_report(db,today,config)
-            print('Report:',path)
-        elif args.command=='sync':
-            if args.backfill_days is not None and not 1<=args.backfill_days<=365:
-                parser.error('--backfill-days must be 1–365')
-            try:
-                result=sync_online(db,today,config,backfill_days=args.backfill_days,refresh_notes=args.refresh_notes)
-            except Exception as exc:
-                label=error_label(exc)
-                status_put(db,'authentication',False,label)
-                db.execute('INSERT INTO runs(at,first_day,last_day,status,changed,message) VALUES(?,?,?,?,?,?)',
-                           (iso_now(),None,str(today),'failed',0,label))
-                db.commit()
-                result={'status':'failed','changed':0,'errors':[label]}
-            print('Garmin sync:',json.dumps(result,indent=2))
-            # Always regenerate deterministic report for data freshness, including partial failures.
-            path=write_report(db,today,config)
-            print('Deterministic report:',path)
-            ai_file=REPORTS/f'{today.isoformat()}_ai_review.md'
-            digest=ai_context_digest(context_data(db,today,config))
-            need_ai=(not ai_file.exists() or state_get(db,'last_ai_context_digest')!=digest)
-            if config['ai_reports_enabled'] and result['status']!='failed' and need_ai:
-                try:
-                    ai_path=write_report(db,today,config,with_ai=True)
-                    state_set(db,'last_ai_context_digest',digest)
-                    db.commit()
-                    print('AI report:',ai_path)
-                except Exception as exc:
-                    print('AI report unavailable:',type(exc).__name__,'(deterministic report preserved)',file=sys.stderr)
-            return 1 if result['status']!='ok' else 0
-        elif args.command=='report':
-            path=write_report(db,today,config,with_ai=config['ai_reports_enabled'])
-            print('Report:',path)
-        elif args.command in ('ask','feedback'):
-            question=args.question if args.question is not None else input('Observation or question: ').strip()
-            try:
-                event_day=dt.date.fromisoformat(args.event_day) if args.event_day else today
-            except ValueError:
-                parser.error('--event-day must use YYYY-MM-DD')
-            if event_day>today:
-                parser.error('Feedback event date cannot be in the future')
-            if args.command=='ask':
-                print('Answer:',ask(db,today,config,question,event_day))
-            else:
-                fid=record_feedback(db,question,event_day)
-                print('Saved feedback ID:',fid)
-                print('Updated report:',write_report(db,today,config))
-        elif args.command=='checkin':
-            checkin(db,today)
-            print('Check-in saved; updated:',write_report(db,today,config))
-        elif args.command in ('activities','review-activities'):
-            if not 1<=args.days<=365: parser.error('--days must be 1–365')
-            first=(today-dt.timedelta(days=args.days-1)).isoformat()
-            records=query_range(db,dt.date.fromisoformat(first),today)
-            for item,decision in reversed(activity_classifications(db,records)):
-                if args.command=='review-activities' and decision['label']!='ambiguous':
-                    continue
-                title=str(item.get('activityName',''))[:85]
-                print(f"{item.get('activityId')} | {activity_date(item)} | "
-                      f"{item.get('activityType',{}).get('typeKey','unknown')} | "
-                      f"{decision['label'].upper()} | {title} | {decision['reason']}")
-                if args.command=='review-activities':
-                    note=item.get('description') or item.get('notes')
-                    if isinstance(note,str) and note.strip():
-                        print('    Note preview:',safe_markdown(note)[:160])
-            if args.command=='review-activities':
-                print('If needed: recovery-advisor classify ACTIVITY_ID workout|feedback_only|auto')
-        elif args.command in ('mark-feedback','unmark-feedback','classify'):
-            if not args.activity_id.isdecimal() or not db.execute(
-                    'SELECT 1 FROM activities WHERE id=?',(args.activity_id,)).fetchone():
-                parser.error('Provide an existing Garmin activity ID; use `recovery-advisor activities`')
-            if args.command=='mark-feedback': label='feedback_only'
-            elif args.command=='unmark-feedback': label='workout'
-            else: label=args.label
-            set_classification_override(db,args.activity_id,label)
-            db.commit()
-            print('Classification:',args.activity_id,label,'(SQLite; settings.json unchanged)')
-            print('Updated report:',write_report(db,today,config))
-        elif args.command=='status':
-            count=db.execute('SELECT COUNT(*) FROM activities').fetchone()[0]
-            dates=db.execute('SELECT MIN(day),MAX(day) FROM activities').fetchone()
-            last=db.execute('SELECT at,status,message FROM runs ORDER BY id DESC LIMIT 1').fetchone()
-            print('Activities:',count,'Date range:',dates[0],'-',dates[1])
-            print('Last sync:',dict(last) if last else 'none (offline imports are not live syncs)')
-            for row in db.execute('SELECT kind,status,last_success,message FROM endpoint_status ORDER BY kind'):
-                print('Endpoint',row['kind'],row['status'],'last success:',row['last_success'])
-            for kind in ('activities','daily','sleep','hrv','body_battery'):
-                print('Last successful',kind,'sync:',state_get(db,f'last_success_at_{kind}') or 'not yet completed')
-            print('Feedback reports:',db.execute('SELECT COUNT(*) FROM feedback').fetchone()[0])
-            print('Garmin wellness notes:',db.execute('SELECT COUNT(*) FROM garmin_notes').fetchone()[0])
-            print('Activity classification overrides:',db.execute('SELECT COUNT(*) FROM activity_classification_overrides').fetchone()[0])
-            print('AI report enabled:',config['ai_reports_enabled'])
-    return 0
+    key = ALIASES.get(args.field, args.field)
+    if key not in set(ALIASES.values()):
+        parser.error(f'Unknown setting: {args.field}. Use config --help for examples')
+    if args.value is None:
+        parser.error(f'Provide a value for {args.field}')
+    value = args.value
+    if key == 'ai_reports_enabled':
+        switches = {'on': 'true', 'off': 'false', 'yes': 'true', 'no': 'false'}
+        value = switches.get(value.lower(), value.lower())
+    return legacy_cli.main(prefix + ['set', key, value])
+
+
+def _manage(argv: list[str], prefix: list[str]) -> int:
+    if not argv or argv[0] in ('-h', '--help'):
+        print(MANAGE_HELP)
+        return 0
+    cmd, *rest = argv
+    direct = {
+        'workouts': 'activities', 'uncertain': 'review-activities',
+        'classify': 'classify', 'notes': 'feedback-list', 'feedback': 'feedback-list',
+        'link': 'link-feedback', 'unlink': 'unlink-feedback',
+        'checkin': 'checkin', 'import': 'import-json',
+    }
+    if cmd == 'note':
+        return _question_command('feedback', rest, prefix)
+    if cmd == 'backfill':
+        parser = argparse.ArgumentParser(prog='recovery-advisor manage backfill')
+        parser.add_argument('days', type=int, help='Number of days to recheck (1–365)')
+        parser.add_argument('--refresh-notes', action='store_true', help='Refetch activity descriptions')
+        args = parser.parse_args(rest)
+        translated = prefix + ['sync', '--backfill-days', str(args.days)]
+        if args.refresh_notes:
+            translated.append('--refresh-notes')
+        return legacy_cli.main(translated)
+    if cmd not in direct:
+        print(f'Unknown maintenance command: {cmd}\n\n{MANAGE_HELP}', file=sys.stderr)
+        return 2
+    return legacy_cli.main(prefix + [direct[cmd]] + rest)
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = list(sys.argv[1:] if argv is None else argv)
+    if not args or args in (['-h'], ['--help'], ['help']):
+        print(MAIN_HELP)
+        return 0
+    if args == ['--version']:
+        print(f'recovery-advisor {__version__}')
+        return 0
+    # Legacy entry point expects --as-of to precede the subcommand.
+    prefix: list[str] = []
+    if args[0] == '--as-of':
+        if len(args) < 3:
+            print('Expected --as-of YYYY-MM-DD followed by a command', file=sys.stderr)
+            return 2
+        prefix, args = args[:2], args[2:]
+    cmd, *rest = args
+    if cmd == 'review':
+        return legacy_cli.main(prefix + ['report'] + rest)
+    if cmd == 'ask':
+        return _question_command('ask', rest, prefix)
+    if cmd == 'config':
+        return _config(rest, prefix)
+    if cmd == 'manage':
+        return _manage(rest, prefix)
+    if cmd in LEGACY_COMMANDS:
+        return legacy_cli.main(prefix + args)
+    print(f'Unknown command: {cmd}\n\n{MAIN_HELP}', file=sys.stderr)
+    return 2
 
 
 def run() -> None:
-    """Console-script entry point with clear, privacy-preserving errors."""
+    """Installed console script with the same friendly error handling as v2.6."""
+    import sqlite3
     try:
         sys.exit(main())
     except (ValueError, RuntimeError, ImportError, sqlite3.DatabaseError) as exc:

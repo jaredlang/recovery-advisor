@@ -124,7 +124,7 @@ def context_data(db:sqlite3.Connection,today:dt.date,config:dict) -> dict:
                           (baseline_first.isoformat(),today.isoformat())):
         checkins.append(dict(row))
     questions=[]
-    for row in db.execute('SELECT event_day,received_at,question FROM feedback '
+    for row in db.execute('SELECT event_day,received_at,question,activity_id FROM feedback '
                           'WHERE event_day BETWEEN ? AND ? ORDER BY received_at,id',
                           (analysis_first.isoformat(),today.isoformat())):
         questions.append(dict(row))
@@ -140,7 +140,7 @@ def context_data(db:sqlite3.Connection,today:dt.date,config:dict) -> dict:
             token=(activity_date(item),note.strip().casefold())
             seen_text.add(token)
             garmin_observations.append({'day':activity_date(item),
-                         'source':'garmin_feedback_only_activity', 'text':note.strip()[:2000]})
+                         'source':'garmin_feedback_only_activity', 'activity_id':str(item.get('activityId')), 'text':note.strip()[:2000]})
     for item in current:
         for field in ('description','notes'):
             value=item.get(field)
@@ -148,7 +148,7 @@ def context_data(db:sqlite3.Connection,today:dt.date,config:dict) -> dict:
                 token=(activity_date(item),value.strip().casefold())
                 if token not in seen_text:
                     seen_text.add(token)
-                    garmin_observations.append({'day':activity_date(item),'source':'activity_description',
+                    garmin_observations.append({'day':activity_date(item),'source':'activity_description', 'activity_id':str(item.get('activityId')),
                                                 'sport':sport(item.get('activityType',{}).get('typeKey','')),
                                                 'original_activity_type':item.get('activityType',{}).get('typeKey','unknown'),
                                                 'text':value.strip()[:2000]})
@@ -162,7 +162,7 @@ def context_data(db:sqlite3.Connection,today:dt.date,config:dict) -> dict:
     workouts=[]
     for item in current:
         workouts.append({
-          'day':activity_date(item), 'sport':sport(item.get('activityType',{}).get('typeKey','')),
+          'day':activity_date(item), 'activity_id':str(item.get('activityId')), 'sport':sport(item.get('activityType',{}).get('typeKey','')),
           'original_activity_type':item.get('activityType',{}).get('typeKey','unknown'),
           'minutes':round((to_float(item.get('duration')) or 0)/60,1),
           'distance_km':round((to_float(item.get('distance')) or 0)/1000,2),

@@ -40,8 +40,15 @@ def load_config(config_path: Path | None = None, db_path: Path | None = None) ->
     settings.pop('daily_sync_lookback_days', None)
     if was_legacy and settings.get('baseline_days') == 14:
         settings['baseline_days'] = 30
+    # v2.6 removes the experimental Garmin web note writer entirely.
+    # Keep athlete settings, but permanently remove obsolete write-back options.
+    removed_writeback = False
+    for key in ('garmin_note_sync_enabled', 'garmin_note_write_transport'):
+        if key in settings:
+            settings.pop(key)
+            removed_writeback = True
     merged = {**DEFAULT_CONFIG, **settings}
-    if settings != merged or legacy_ids is not None:
+    if settings != merged or legacy_ids is not None or removed_writeback:
         save_config(merged, config_path=config_path)
     return merged
 

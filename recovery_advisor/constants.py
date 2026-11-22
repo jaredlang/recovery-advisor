@@ -11,7 +11,7 @@ DEFAULT_CONFIG = {
     'weight_kg': None,
     'race_goal': '',
     'dietary_preferences': '',
-    'feedback_reporting_mode': 'issues_only'
+    'feedback_reporting_mode': 'issues_only',
 }
 ACTIVITY_KEYS = ('activityId','activityName','startTimeLocal','startTimeGMT',
                  'duration','distance','calories','averageHR','maxHR',

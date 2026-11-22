@@ -8,6 +8,7 @@ recovery_advisor/cli.py
 recovery_advisor/constants.py
 recovery_advisor/feedback.py
 recovery_advisor/garmin_sync.py
+recovery_advisor/legacy_cli.py
 recovery_advisor/paths.py
 recovery_advisor/reporting.py
 recovery_advisor/settings.py
@@ -20,3 +21,4 @@ recovery_advisor.egg-info/requires.txt
 recovery_advisor.egg-info/top_level.txt
 tests/test_advisor.py
 tests/test_cli_package.py
+tests/test_simple_cli.py

@@ -8,3 +8,7 @@ settings.json
 *.db
 *.sqlite3
 .env
+
+# Garmin Personal API key/token caches are stored outside the project folder
+*.token
+garmin_tokens.json
