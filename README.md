@@ -1,235 +1,149 @@
-# Endurance Advisor MVP — v2.2
+# Recovery Advisor v2.3
 
-Local-first Garmin training and recovery assistant for **amateur endurance athletes**. A scheduled collector syncs Garmin data at **10:00 a.m. and 7:00 p.m.**, keeps a **rolling 30-day baseline**, analyzes the **last seven days**, and produces a rule-based report plus optional AI interpretation. Questions about unusual performance, discomfort, or recovery become stored athlete feedback automatically. Daily check-ins are **optional**.
+An AI-powered endurance advisor that helps amateur athletes understand their body's response to training and make smarter decisions about recovery, nutrition, and future workouts.
 
-Designed for **Windows + Python 3.12+**. The code and tests run offline; live Garmin and OpenAI calls must be tested with your credentials on your computer.
+**What's new in v2.3:** The former 1,407-line `advisor.py` is now a small compatibility launcher backed by a maintained `recovery_advisor` package. Installing the package provides a real `recovery-advisor` command. The Garmin sync and athlete-facing features of v2.2 are retained; there is **no SQLite schema change** in this release.
 
-## What's new in v2
+## Windows quick start
 
-| Behavior | Previous MVP | v2 |
-| --- | --- | --- |
-| Baseline | 14 days | **30 days** |
-| Scheduled Garmin activity sync | Today + yesterday | **From last successful activity-sync date to today, inclusive** |
-| Failed sleep, HRV, daily or Body Battery sync | Possibly skipped on later sync | **Each endpoint has a separate last-successful checkpoint and catches up independently** |
-| Long-late Garmin uploads | No explicit reconciliation | Manual `sync --backfill-days 30` |
-| Questions about symptoms/performance | Answer only | **Saved as dated athlete feedback before the AI call** |
-| User-entered resting heart rate | Not supported | `resting_hr_bpm` setting |
-| User's usual sleep times | Not supported | `usual_bedtime`, `usual_wake_time` settings |
-| AI review | Frequent missing-data caveats | **Distinguishes Garmin observations, user settings, calculated baselines and labelled assumptions** |
-
-## v2.2: Automatic classification of Garmin feedback-only entries
-
-**No activity IDs are required in `settings.json`.** The app automatically classifies Garmin activity records using their actual sport type, name, description/notes, recorded exercise telemetry, duration/distance, and manual-entry flag when present. Classification is recalculated from local data whenever the report runs—no extra Garmin requests or AI calls are required for this step.
-
-| Garmin entry | Default handling |
-| --- | --- |
-| Running, cycling, swimming, or another recognized activity type (even with a symptom note) | **Workout:** included in training totals; text also analyzed as feedback |
-| Explicit journal/recovery/symptom entry under an unrecognized/Other type with no recorded exercise telemetry | **Feedback-only:** excluded from training totals; its note is analyzed |
-| Generic/unclear Other activity | **Ambiguous:** counted provisionally, surfaced in the report and `review-activities` command; never silently removed |
-
-The API does **not** provide a universal notes-only flag. Automatic classification is a conservative heuristic, **not guaranteed** to identify every note-only entry. For example, a generic `Other` activity showing 57 minutes/9.8 km may need confirmation; the app cannot know whether that was a real workout from duration/distance alone. Recognized workout types with actual sensor data take precedence over symptom wording, preventing a normal run with notes from disappearing from the training record.
-
-See the classifications without editing any settings:
-
-```powershell
-.\.venv\Scripts\python.exe advisor.py activities --days 30
-.\.venv\Scripts\python.exe advisor.py review-activities --days 30
-```
-
-Only if an entry is genuinely ambiguous or classified incorrectly, confirm it once:
-
-```powershell
-.\.venv\Scripts\python.exe advisor.py classify 123456789 feedback_only
-.\.venv\Scripts\python.exe advisor.py classify 123456789 workout
-.\.venv\Scripts\python.exe advisor.py classify 123456789 auto
-```
-
-The ID is illustrative and used **only** to correct an exception. Those optional decisions live in the SQLite `activity_classification_overrides` table, not `settings.json`. Existing v2.1 `notes_only_activity_ids` values are migrated automatically into SQLite and the obsolete setting is removed on first launch. This preserves prior confirmations while requiring **no manual ID list going forward**. The older `mark-feedback` and `unmark-feedback` commands remain compatibility aliases for confirming an exception.
-
-**Important:** When an activity is provisionally counted as ambiguous, its workout totals remain visible but the AI is instructed to qualify them. The experimental recovery score does not treat the absence of athlete notes as a positive signal when ambiguous Garmin entries may hide feedback.
-
-## v2.1 capabilities retained: Garmin notes and recovery context score
-
-**Garmin feedback content:** Activity summaries/details may include `description`; wellness-activity summaries may contain `notes`. The collector retains text fields but excludes profile IDs and GPS metadata. Activity details also preserve Garmin self-evaluation effort (`directWorkoutRpe`) and feeling (`directWorkoutFeel`) when available. Written observations are sent to the AI provider only when AI analysis is enabled.
-
-**Recovery score:** The report shows an **experimental 0–100 recovery context index** with evidence and low/medium confidence. It is not a validated training-readiness or medical score. Its reference value of 70 is arbitrary; an issues-only reporting convention with no recorded concerns and no ambiguous records adds at most +2 points. Recovery measurements, when available, influence the score.
-
-**Technical warnings:** API status codes stay in the `status` command; athlete-facing reports only mention problems affecting the interpretation.
-
-**Upgrade steps:** Disable the previous task, back up your `data/`, `settings.json` and `reports/` folders, extract v2.2 into a new folder, then copy your backed-up folders into it. Recreate `.venv` and run `advisor.py status`, `advisor.py review-activities --days 30`, `advisor.py report` and `advisor.py sync`. Existing sync checkpoints and recorded workouts are retained. On first launch, the deprecated notes-only ID list is moved to SQLite and removed from `settings.json`, preserving your edited weight and race goal. Restart the twice-daily schedule only after confirming the new installation.
-
-If a Garmin note was edited after the last successful sync and falls outside the normal recent-day detail checks, manually refresh descriptions:
-
-```powershell
-.\.venv\Scripts\python.exe advisor.py sync --backfill-days 30 --refresh-notes
-```
-
-This makes extra Garmin requests, so reserve it for occasional reconciliation. The unit tests use simulated Garmin data; test classification of your actual Garmin note entries locally before relying on training totals.
-
-## Project setup
-
-Extract the ZIP to a writable directory such as `C:\Users\YOU\endurance_advisor_mvp_v2_2`. From PowerShell **inside the extracted project directory**:
+From PowerShell, extract the ZIP, open the `endurance_advisor_mvp_v2_3` folder, and run:
 
 ```powershell
 py -3 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe -m pip install -e .
+.\.venv\Scripts\Activate.ps1
+recovery-advisor --help
+recovery-advisor status
 ```
 
-Store your Garmin Personal API key in the official client's per-user key file:
+If PowerShell blocks `Activate.ps1`, you can allow it **for this PowerShell session only**:
 
 ```powershell
-New-Item -ItemType Directory -Force "$HOME\.config\garmin" | Out-Null
-$secret = Read-Host "Garmin Personal API key" -AsSecureString
-$plaintext = [System.Net.NetworkCredential]::new('', $secret).Password
-[System.IO.File]::WriteAllText("$HOME\.config\garmin\connect-personal-api-key", $plaintext)
-Remove-Variable plaintext, secret
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+.\.venv\Scripts\Activate.ps1
 ```
 
-Or use `GARMIN_PERSONAL_API_KEY` as an environment variable. **Never put API keys in source code or `settings.json`.**
+An activated virtual environment places `.venv\Scripts` on your session's `PATH`, so you can type `recovery-advisor` without a Python path. In a **new** PowerShell window, activate the environment again. You can alternatively run `.\.venv\Scripts\recovery-advisor.exe status` without activation. `pip install -e .` is an **editable installation**: source changes in the extracted folder take effect without reinstalling, except when changing entry points or package metadata.
 
-The application automatically creates `settings.json` on first launch. It includes:
+Other platforms can install using `python -m venv .venv; .venv/bin/python -m pip install -e .; source .venv/bin/activate` (as separate commands) and then run `recovery-advisor`.
 
-```json
-{
-  "timezone": "America/Chicago",
-  "baseline_days": 30,
-  "analysis_days": 7,
-  "resting_hr_bpm": null,
-  "usual_bedtime": null,
-  "usual_wake_time": null,
-  "ai_reports_enabled": false,
-  "openai_model": "gpt-4.1-mini",
-  "weight_kg": null,
-  "race_goal": "",
-  "dietary_preferences": "",
-  "feedback_reporting_mode": "issues_only"
-}
-```
+## Upgrade from v2.2 without losing your data
 
-**Set reference values only if they are genuinely representative of you.** Unknown values remain `null`; the AI is instructed not to fabricate them. For example, if you know your typical resting HR and sleep schedule:
+1. **Disable the existing `EnduranceAdvisor-GarminSync` Windows task** before changing folders; do not leave two scheduled copies active.
+2. Back up your current `settings.json`, `data/`, and optionally `reports/`.
+3. Extract v2.3 into a **new folder**. Copy the three backed-up items into that folder (do not overwrite the new source files).
+4. Create a new virtual environment and install the project using the quick-start commands above.
+5. Run `recovery-advisor status`, followed by a manual `recovery-advisor sync` after your API key is configured. Previous checkpoint dates and athlete feedback remain in SQLite.
+6. Reinstall the Windows task by running `powershell -ExecutionPolicy Bypass -File .\install_schedule.ps1` from the **v2.3 directory**. This task calls the installed CLI rather than `advisor.py`.
+
+All configured settings, including 30-day baseline, 7-day analysis, manual resting-HR reference, body mass and race goal, remain in `settings.json`. The note-only classifier remains automatic; any rare corrections stay in SQLite, never `settings.json`.
+
+**API key:** Follow Garmin Personal API's own key configuration instructions. The official client reads `GARMIN_PERSONAL_API_KEY` or a supported user-specific key file. Never place a Garmin or OpenAI key in `settings.json` or commit it to Git. For the Windows task, configure keys for the same signed-in Windows account that runs the task, not just in a transient PowerShell session. The program does not require the key for offline `status`, `report`, `feedback`, or `import-json` commands.
+
+## Commands
+
+Once the virtual environment is active:
 
 ```powershell
-.\.venv\Scripts\python.exe advisor.py set resting_hr_bpm 52
-.\.venv\Scripts\python.exe advisor.py set usual_bedtime 22:30
-.\.venv\Scripts\python.exe advisor.py set usual_wake_time 06:30
+recovery-advisor sync
+recovery-advisor status
+recovery-advisor report
+recovery-advisor ask
+recovery-advisor feedback --question "Felt unusually fatigued after my long ride"
+recovery-advisor activities --days 30
+recovery-advisor review-activities --days 30
+recovery-advisor classify 12345678 feedback_only
+recovery-advisor classify 12345678 auto
+recovery-advisor sync --backfill-days 30 --refresh-notes
+recovery-advisor set resting_hr_bpm 50
+recovery-advisor set weight_kg 70
+recovery-advisor set ai_reports_enabled true
 ```
 
-**Those numbers are examples, not values inferred from your Garmin account.** To clear a reference, use `advisor.py set resting_hr_bpm clear` or `advisor.py set usual_bedtime clear`.
+The `sync` command uses successful **per-endpoint checkpoint dates** and can catch up after several missed days. It avoids duplicate activities and fetches changed or missing details, including Garmin workout notes. `--backfill-days` is for the less-common case of a historical workout that Garmin received **after** a successful checkpoint. The `feedback` command stores a dated observation even without AI; `ask` stores the question first and then calls AI. By default, `report` is deterministic and makes no AI API call.
 
-## Synchronization and data-gap behavior
+`recovery-advisor --as-of 2026-11-08 report` is available for offline historical checks; the `--as-of` option must appear **before** the subcommand.
 
-```powershell
-.\.venv\Scripts\python.exe advisor.py sync
-.\.venv\Scripts\python.exe advisor.py status
+### Recovery context score
+
+The 0–100 recovery score is an **experimental heuristic**, not validated readiness or medical clearance. It uses observed training, limited available wellness indicators, and feedback. Under the default `issues_only` reporting convention, silence adds only a small favorable adjustment and remains a weak signal, not proof of full recovery. If any symptom warrants medical evaluation, a score should not override that concern.
+
+## Modules and responsibilities
+
+```text
+endurance_advisor_mvp_v2_3/
+├── pyproject.toml                 # packaging metadata and installed console command
+├── advisor.py                     # small v2.2-compatible launcher/import facade
+├── install_schedule.ps1           # Windows task: recovery-advisor sync, 10 AM + 7 PM
+├── uninstall_schedule.ps1
+├── settings.example.json
+├── requirements.txt               # alternate pip install -r requirements.txt
+├── recovery_advisor/
+│   ├── __main__.py                # python -m recovery_advisor fallback
+│   ├── cli.py                     # argument parsing and command dispatch
+│   ├── settings.py                # settings, migration and user defaults
+│   ├── paths.py                   # persistent paths independent of current directory
+│   ├── constants.py               # configuration defaults and allowed data fields
+│   ├── storage.py                 # SQLite, data sanitization and import
+│   ├── garmin_sync.py             # checkpointed Garmin API collection
+│   ├── classification.py          # automatic workouts-vs-notes classification
+│   ├── analysis.py                # 7-day analysis, baseline and recovery score
+│   ├── reporting.py               # deterministic report and optional LLM review
+│   └── feedback.py                # athlete observations, AI Q&A and check-ins
+├── tests/
+│   ├── test_advisor.py            # original v2.2 regression tests
+│   └── test_cli_package.py        # CLI/path/package regression tests
+├── examples/
+└── data/, reports/, settings.json # locally created, excluded from Git
 ```
 
-- **First checkpoint-based sync:** Fetches the latest 30 calendar days, inclusive. Existing installations of the old MVP have no v2 checkpoint, so the first v2 run performs this backfill automatically.
-- **Subsequent activity sync:** Reads `last_success_day_activities` in SQLite and searches from that date *inclusive* through the current local date. If the computer doesn't run for 5 days, the next successful run searches all the missed days, not merely a fixed two-day window.
-- **Failed activity search:** Doesn't advance the activity cursor. The next run attempts the same uncovered interval.
-- **Recovery sync:** Sleep, HRV, daily and Body Battery each track their own successful sync date/time. If HRV fails but activity search succeeds, HRV's next run still covers its missing period.
-- **Detail retrieval:** New/changed records and up to 50 older missing activity details are fetched on a scheduled run; recent activity details are also rechecked for edited notes. New/changed summaries are upserted by Garmin activity ID; repeated syncs are idempotent.
-- **Last-success timestamp:** The program records both UTC timestamp and local sync day for every successful endpoint. Because Garmin's search accepts day-based ranges, the collector uses the local *date* of the last successful sync, inclusive; it doesn't invent a more granular API query.
-- **Late uploads predating a successful sync:** An activity recorded on an old date and uploaded only *after* that date's successful scan could still be missed. To reconcile the last 30 days on demand, run:
-
-```powershell
-.\.venv\Scripts\python.exe advisor.py sync --backfill-days 30
-```
-
-That backfill scans activities and recovery metrics for the requested span without clearing the database or creating duplicates. It intentionally makes more API calls. Two daily scheduled syncs minimize normal calls but do **not** constitute an unlimited Garmin API allowance.
-
-If Garmin returns 429, the program stops making additional wellness calls in that run, retains successful checkpoints and reports partial status. If your watch hasn't uploaded an activity to Garmin, the app cannot retrieve it.
-
-## Report, questions and feedback
-
-```powershell
-.\.venv\Scripts\python.exe advisor.py report
-.\.venv\Scripts\python.exe advisor.py ask
-.\.venv\Scripts\python.exe advisor.py feedback
-```
-
-- `report`: Regenerates the latest deterministic report without accessing Garmin. When AI reports are enabled, also generates an AI review.
-- `ask`: Prompts for your question and **saves it as dated athlete feedback before requesting an AI answer**. Even if the OpenAI call fails or no key is configured, the observation remains in the SQLite database. The deterministic weekly report refreshes immediately. Answers are saved separately as `reports/YYYY-MM-DD_answer_ID.md` rather than overwriting previous answers.
-- `feedback`: Saves a performance/symptom observation to the weekly report without requiring an AI API key.
-- Both `ask` and `feedback` accept `--event-day YYYY-MM-DD` for an observation that actually occurred earlier; default is today. Questions and observations are surfaced in the **7-day analysis**. A feedback entry represents what you reported, not an independently confirmed diagnosis.
-- `checkin`: Optional structured fatigue/soreness, energy and meal notes. **No daily check-in is required** and the advisor should not assume normal health simply because none was submitted.
-
-Examples:
-
-```powershell
-.\.venv\Scripts\python.exe advisor.py ask
-.\.venv\Scripts\python.exe advisor.py feedback --event-day 2026-11-20
-.\.venv\Scripts\python.exe advisor.py set race_goal "Half-distance triathlon"
-.\.venv\Scripts\python.exe advisor.py set weight_kg 70.3
-```
-
-### How reference assumptions work
-
-The analysis context contains `baseline_references`, which labels each reference by provenance:
-
-1. If `resting_hr_bpm` is set, it is a **user-provided reference**, not an observed heart-rate measurement for that morning.
-2. Otherwise, if at least five valid Garmin daily resting-HR readings exist within 30 days, their **median** becomes a **calculated** provisional resting-HR reference. If neither condition holds, the advisor does **not** invent a numeric value.
-3. If usual bedtime and wake time are configured, their difference indicates **possible sleep opportunity**, not measured sleep or proof of recovery.
-4. If five or more valid Garmin sleep-duration records exist, the baseline includes the **median recorded sleep duration** with its sample count.
-5. An absence of reports is a weak favorable signal *only* when `feedback_reporting_mode` is `issues_only`; it never proves normal recovery.
-
-Both the deterministic report and AI review are directed to state these assumptions explicitly. The AI should provide practical, conditional training/nutrition guidance without repeatedly listing irrelevant missing fields. A 30-day history is **not** a medically validated recovery baseline.
-
-### Optional OpenAI analysis
-
-The default deterministic report works without OpenAI. To enable conversational analysis and AI review, set your `OPENAI_API_KEY` in the Windows environment and opt in:
-
-```powershell
-$secret = Read-Host "OpenAI API key" -AsSecureString
-$plaintext = [System.Net.NetworkCredential]::new('', $secret).Password
-[Environment]::SetEnvironmentVariable('OPENAI_API_KEY', $plaintext, 'User')
-$env:OPENAI_API_KEY = $plaintext
-Remove-Variable plaintext, secret
-.\.venv\Scripts\python.exe advisor.py set ai_reports_enabled true
-.\.venv\Scripts\python.exe advisor.py report
-```
-
-OpenAI API billing is separate. The app calls OpenAI with `store=False`, sends a minimized seven-day activity/30-day wellness context plus relevant symptom questions, and never transmits Garmin API credentials or GPS/profile IDs. Nevertheless, symptom questions and wellness summaries are **sensitive personal health information**; use this feature only if you're comfortable sharing it with the API provider.
+Dependencies point **in one direction**: storage/configuration → Garmin/classification → analysis → reporting → feedback/CLI. The CLI is an adapter and should not contain domain calculations. The thin `advisor.py` facade remains for older commands and tests but new code should import from the package's dedicated modules.
 
 ## Windows Task Scheduler
 
-After a manual `sync` works, install the scheduled task:
+After manually verifying `recovery-advisor sync`:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\install_schedule.ps1
 Get-ScheduledTask -TaskName EnduranceAdvisor-GarminSync
 ```
 
-It runs once at 10 AM and once at 7 PM **Windows local time**, under your signed-in account. Match your OS time zone with `timezone` in settings. The task can catch up when Windows next runs it, but isn't guaranteed to execute while the PC is off or the account is signed out. To remove it:
+The task invokes `.venv\Scripts\recovery-advisor.exe sync` at **10 AM and 7 PM Windows local time**, so activation is not required for scheduled runs. The task is created for the signed-in Windows user. Configure your Windows time zone consistently with the `timezone` value in `settings.json` (default: `America/Chicago`). The task is not guaranteed to run while the PC is powered off or the account is signed out. To remove it:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\uninstall_schedule.ps1
 ```
 
-## Upgrade from the original MVP without losing history
+## Optional AI reports
 
-1. **Uninstall or disable the old scheduled task first** to avoid two collectors running simultaneously.
-2. **Back up** your old `data/`, `settings.json` and `reports/` (all are local files; no cloud migration is needed).
-3. Extract v2 into a **new folder**. Copy your existing `data/` and `settings.json` into that folder. You may also copy `reports/` if you want the historical Markdown reports.
-4. Create the virtual environment and run `advisor.py status`. The app adds the new classification-override table when opening the existing SQLite database. A legacy config with `daily_sync_lookback_days` will be migrated, and the previous shipped 14-day baseline moves to 30 days. Other personal settings are preserved.
-5. Run `advisor.py sync` manually: absent v2 checkpoint metadata triggers a fresh 30-day reconciliation without duplicating existing Garmin activity IDs.
-6. Install the v2.2 schedule in the **new** directory. Do not install two running copies pointed at the same Garmin credentials.
+Set `OPENAI_API_KEY` in the environment available to the CLI or scheduled-task user. Then:
 
-## Offline tests
+```powershell
+recovery-advisor set ai_reports_enabled true
+recovery-advisor report
+```
+
+AI reports are disabled by default. Calls to OpenAI are billed separately and include minimally necessary training, nutrition and symptom context; no raw GPS, account identifiers, Garmin keys, or raw request diagnostics are sent. However, the context **does include potentially sensitive workout and health information**. Do not turn on AI unless you are comfortable with that data transfer. The app uses `store=False` when making its API request. A question about concerning symptoms is not a medical diagnosis; persistent or severe symptoms require appropriate professional assessment.
+
+## Where files are stored
+
+When run from an editable installation (`pip install -e .`) in this extracted folder, the application stores state in the **project folder** (regardless of where the command is launched):
+
+- `settings.json`: personal settings
+- `data/advisor.sqlite3`: workouts, wellness, checkpoints, notes and feedback
+- `reports/`: Markdown reports and minimized JSON context
+
+The optional environment variable `RECOVERY_ADVISOR_HOME` overrides the storage folder, for example to isolate a development run. When installed as a non-editable wheel without a project folder, the default storage folder is `~/.recovery-advisor`. Keep copies of `settings.json` and `data/` together when migrating. Both the SQLite database and report context may contain sensitive health information; they remain local and are excluded by `.gitignore`.
+
+## Offline verification
+
+Run the tests without Garmin credentials:
 
 ```powershell
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
-.\.venv\Scripts\python.exe advisor.py --as-of 2026-11-08 import-json examples\sample_activities.json
-.\.venv\Scripts\python.exe advisor.py --as-of 2026-11-08 report
+recovery-advisor --help
+recovery-advisor --as-of 2026-11-08 import-json examples\sample_activities.json
+recovery-advisor --as-of 2026-11-08 report
 ```
 
-The tests cover missing-day catch-up, endpoint-specific failed requests, older activity details, manual backfill, feedback persistence, baseline assumptions, privacy allowlists and idempotent imports. They do not test actual Garmin authentication or the live OpenAI API.
-
-## File and privacy notes
-
-- SQLite: `data/advisor.sqlite3`. Reports: `reports/`. Settings: `settings.json`.
-- `.gitignore` excludes local data, keys, reports and settings. API credentials are **not** copied into the project.
-- `sync` is the only CLI command that contacts Garmin. Both `ask` and `report` read local data.
-- The model is not a medical provider. Persistent or worsening symptoms merit medical evaluation; chest pain, fainting, severe breathing difficulty, or new neurological problems require urgent medical care.
-- If the user requests no AI calls, leave `ai_reports_enabled` false and don't run `ask`.
-
-Garmin API links: https://github.com/garmin/connect-personal-api-python · https://developer.garmin.com/gc-developer-program/personal/swagger-docs/
+For CLI testing in an empty directory without touching your actual data, set `RECOVERY_ADVISOR_HOME` to a temporary folder before running a command. Automated tests cover cached workouts, note classification, symptom persistence, checkpoint catch-up, and the installed command's offline behavior. **Live Garmin calls, OpenAI calls, and scheduled-task execution need validation on your computer.**

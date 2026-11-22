@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "recovery-advisor"
+version = "2.3.0"
+description = "Personal Garmin endurance-training and recovery advisor"
+requires-python = ">=3.12"
+dependencies = [
+  "garmin-connect-personal-api-python>=1.1.0,<2",
+  "openai>=1.75",
+  "tzdata>=2025.1",
+]
+
+[project.scripts]
+recovery-advisor = "recovery_advisor.cli:run"
+
+[tool.setuptools]
+packages = ["recovery_advisor"]

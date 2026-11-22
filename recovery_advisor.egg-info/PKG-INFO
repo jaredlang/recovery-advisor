@@ -1,0 +1,8 @@
+Metadata-Version: 2.4
+Name: recovery-advisor
+Version: 2.3.0
+Summary: Personal Garmin endurance-training and recovery advisor
+Requires-Python: >=3.12
+Requires-Dist: garmin-connect-personal-api-python<2,>=1.1.0
+Requires-Dist: openai>=1.75
+Requires-Dist: tzdata>=2025.1

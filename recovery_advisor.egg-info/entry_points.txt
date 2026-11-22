@@ -1,0 +1,2 @@
+[console_scripts]
+recovery-advisor = recovery_advisor.cli:run

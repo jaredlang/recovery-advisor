@@ -1,14 +1,12 @@
-# Run after setup: powershell -ExecutionPolicy Bypass -File .\install_schedule.ps1
+# Run after `pip install -e .`: powershell -ExecutionPolicy Bypass -File .\install_schedule.ps1
 # Creates scheduled tasks for the CURRENT signed-in Windows account.
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
-$python = Join-Path $root '.venv\Scripts\python.exe'
-$script = Join-Path $root 'advisor.py'
-if (-not (Test-Path $python)) { throw "Python virtual environment not found: $python. See README.md." }
-if (-not (Test-Path $script)) { throw "advisor.py not found." }
+$cli = Join-Path $root '.venv\Scripts\recovery-advisor.exe'
+if (-not (Test-Path $cli)) { throw "CLI not installed: $cli. Run .\.venv\Scripts\python.exe -m pip install -e ." }
 
 $taskName = 'EnduranceAdvisor-GarminSync'
-$action = New-ScheduledTaskAction -Execute $python -Argument ('"{0}" sync' -f $script) -WorkingDirectory $root
+$action = New-ScheduledTaskAction -Execute $cli -Argument 'sync' -WorkingDirectory $root
 $morning = New-ScheduledTaskTrigger -Daily -At '10:00AM'
 $evening = New-ScheduledTaskTrigger -Daily -At '7:00PM'
 $principal = New-ScheduledTaskPrincipal -UserId ([System.Security.Principal.WindowsIdentity]::GetCurrent().Name) -LogonType Interactive -RunLevel Limited
